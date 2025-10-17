@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TStore — demo</title>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;margin:0;background:#f6fbff;color:#123}
+    header{background:linear-gradient(90deg,#0b7bdc,#3aa0ff);color:white;padding:12px 18px;display:flex;justify-content:space-between;align-items:center}
+    .logo{display:flex;align-items:center;gap:10px}
+    .btn{background:#0b7bdc;color:white;padding:8px 10px;border-radius:6px;border:none;cursor:pointer}
+    .ghost{background:#ffd400;color:#0b7bdc;font-weight:700}
+    main{max-width:1000px;margin:18px auto;padding:0 12px}
+    .card{background:white;padding:12px;border-radius:10px;box-shadow:0 6px 18px rgba(10,20,40,.06);margin-bottom:12px}
+    .products{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+    .product{display:flex;gap:12px;border:1px solid #eef6ff;padding:10px;border-radius:8px}
+    img{width:120px;height:90px;object-fit:cover;border-radius:6px}
+    @media(max-width:800px){.products{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo"><div style="background:#ffd400;color:#0b7bdc;padding:8px;border-radius:8px;font-weight:800">TS</div><div><strong>TStore</strong><div style="font-size:12px">маркетплейс</div></div></div>
+    <div id="nav"></div>
+  </header>
+  <main>
+    <div id="content"></div>
+  </main>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const apiBase = '/api';
+let token = localStorage.getItem('tstore_token') || null;
+let me = null;
+const nav = document.getElementById('nav');
+const content = document.getElementById('content');
+function updateNav(){
+  if(token && me){
+    nav.innerHTML = '<span style="margin-right:12px;color:white">'+(me.name||me.login)+'</span><button class="btn" id="btnProfile">Профіль</button> <button class="btn" id="btnLogout">Вийти</button>';
+    document.getElementById('btnProfile').onclick=()=>loadProfile();
+    document.getElementById('btnLogout').onclick=()=>{ localStorage.removeItem('tstore_token'); token=null; me=null; renderHome(); updateNav(); };
+  } else {
+    nav.innerHTML = '<button class="btn" id="btnLogin">Увійти</button> <button class="btn ghost" id="btnRegister">Реєстрація</button>';
+    document.getElementById('btnLogin').onclick=()=>showLogin();
+    document.getElementById('btnRegister').onclick=()=>showRegister();
+  }
+}
+async function api(path, opts={}){
+  const headers = opts.headers || {};
+  if(token) headers['Authorization']='Bearer '+token;
+  opts.headers = headers;
+  const res = await fetch(apiBase+path, opts);
+  if(res.status===401){ alert('Потрібна авторизація'); token=null; localStorage.removeItem('tstore_token'); me=null; updateNav(); renderHome(); throw 'auth'; }
+  return res;
+}
+
+async function checkMe(){
+  if(!token) return;
+  try{
+    const r = await api('/me');
+    me = await r.json();
+  }catch(e){ me=null; token=null; localStorage.removeItem('tstore_token'); }
+}
+
+function el(html){ const d=document.createElement('div'); d.innerHTML=html; return d.firstElementChild; }
+
+async function renderHome(){
+  content.innerHTML = '<div class="card"><h2>Ласкаво просимо в TStore</h2><div style="margin-top:8px"><button class="btn" id="btnShowAll">Показати товари</button> <button class="btn ghost" id="btnAdd">Додати оголошення</button></div></div><div id="list" class="products"></div>';
+  document.getElementById('btnShowAll').onclick=()=>loadListings();
+  document.getElementById('btnAdd').onclick=()=>showAdd();
+  loadListings();
+}
+
+async function loadListings(){
+  const r = await api('/listings');
+  const items = await r.json();
+  const list = document.getElementById('list');
+  list.innerHTML = items.map(p=>`<div class="product card"><img src="${p.img?('data:image;base64,'+p.img):'data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=400 height=300><rect width=400 height=300 fill=%23eef6ff/></svg>'}" /><div><h4>${p.title}</h4><div style="color:#6b7b8c">${p.category} • ${p.ownerName||''}</div><div style="font-weight:700;margin-top:8px">${p.price} грн</div><div style="margin-top:8px"><button class='btn' data-id='${p.id}' data-action='view'>Переглянути</button> <button class='btn ghost' data-id='${p.id}' data-action='report'>Поскаржитись</button></div></div></div>`).join('');
+  list.querySelectorAll('[data-action=view]').forEach(b=>b.onclick=e=>viewListing(b.dataset.id));
+  list.querySelectorAll('[data-action=report]').forEach(b=>b.onclick=e=>reportListing(b.dataset.id));
+}
+
+function showLogin(){
+  content.innerHTML = `<div class="card"><h3>Увійти</h3><form id="f"><label>Логін<input name="login" required></label><label>Пароль<input name="pass" type="password" required></label><div style="margin-top:8px"><button class="btn">Увійти</button></div></form></div>`;
+  document.getElementById('f').onsubmit=async e=>{ e.preventDefault(); const fd=new FormData(e.target); const body={login:fd.get('login'), pass:fd.get('pass')}; const res = await fetch(apiBase+'/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); if(res.ok){ const data=await res.json(); token=data.token; localStorage.setItem('tstore_token', token); await checkMe(); updateNav(); renderHome(); } else { alert('Помилка входу'); } };
+}
+
+function showRegister(){
+  content.innerHTML = `<div class="card"><h3>Реєстрація</h3><form id="f"><label>Ім'я<input name="name" required></label><label>Логін<input name="login" required></label><label>Пароль<input name="pass" type="password" required></label><label>Телефон<input name="phone"></label><div style="margin-top:8px"><button class="btn">Зареєструватись</button></div></form></div>`;
+  document.getElementById('f').onsubmit=async e=>{ e.preventDefault(); const fd=new FormData(e.target); const body={name:fd.get('name'), login:fd.get('login'), pass:fd.get('pass'), phone:fd.get('phone')}; const res = await fetch(apiBase+'/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); if(res.ok){ const data=await res.json(); token=data.token; localStorage.setItem('tstore_token', token); await checkMe(); updateNav(); renderHome(); } else { alert('Помилка реєстрації'); } };
+}
+
+function showAdd(){
+  content.innerHTML = `<div class="card"><h3>Додати оголошення</h3><form id="f" enctype="multipart/form-data"><label>Назва<input name="title" required></label><label>Категорія<select name="category"><option>Електроніка</option><option>Одяг</option><option>Дім</option><option>Хобі</option></select></label><label>Ціна<input name="price" required></label><label>Опис<textarea name="desc"></textarea></label><label>Телефон<input name="phone"></label><label>Фото<input name="photo' type="file" name="photo" accept="image/*"></label><div style="margin-top:8px"><button class="btn">Додати</button></div></form></div>`;
+  const f = document.getElementById('f');
+  f.onsubmit=async e=>{ e.preventDefault(); if(!token){ alert('Увійдіть'); return; } const fd = new FormData(e.target); const res = await fetch(apiBase+'/listings',{method:'POST',headers:{'Authorization':'Bearer '+token},body:fd}); if(res.ok){ alert('Оголошення створено'); renderHome(); loadListings(); } else { const e2 = await res.json(); alert('Помилка: '+(e2.error||'')); } };
+}
+
+async function viewListing(id){
+  const r = await api('/listings/'+id);
+  const p = await r.json();
+  content.innerHTML = `<div class="card"><h3>${p.title}</h3><div style="color:#6b7b8c">${p.category} • ${p.ownerName||''}</div><div style="font-weight:700;margin-top:8px">${p.price} грн</div><div style="margin-top:8px">${p.desc||''}</div><div style="margin-top:8px"><strong>Тел:</strong> ${p.phone||''} <button class="btn" id="copy">Копіювати</button></div><div style="margin-top:8px"><button class="btn" id="chatBtn">Написати продавцю</button> <button class="btn ghost" id="reportBtn">Поскаржитись</button></div></div><div id="chatArea"></div>`;
+  document.getElementById('copy').onclick=()=>{ navigator.clipboard.writeText(p.phone||''); alert('Скопійовано'); };
+  document.getElementById('reportBtn').onclick=()=>reportListing(id);
+  document.getElementById('chatBtn').onclick=()=>openChat(p);
+}
+
+function reportListing(id){
+  if(!token){ alert('Увійдіть'); return; }
+  const txt = prompt('Опишіть проблему:'); if(!txt) return;
+  fetch(apiBase+'/reports',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({type:'Оголошення', text:txt, targetListingId:id})}).then(r=>{ if(r.ok) alert('Скаргу відправлено'); else alert('Помилка'); });
+}
+
+let socket = null;
+function ensureSocket(){
+  if(socket) return socket;
+  socket = io({ auth: { token } });
+  socket.on('connect', ()=>console.log('socket connected'));
+  socket.on('chat_history', d=>{ renderChat(d.chatId, d.messages); });
+  socket.on('msg', m=>{ appendMsg(m); });
+  socket.on('connect_error', e=>console.error('sock err', e));
+  return socket;
+}
+
+function openChat(p){
+  if(!token){ alert('Увійдіть'); return; }
+  ensureSocket();
+  // request join (sellerId from p.ownerId is not in API response due to join simplification)
+  // We will open chat by listingId; server will use current user as buyer and listing owner as seller
+  socket.emit('join', { listingId: p.id, sellerId: p.ownerId, buyerId: null });
+  // show chat UI
+  document.getElementById('chatArea').innerHTML = `<div class="card"><div id="msgs" style="max-height:250px;overflow:auto"></div><form id="mf"><input name="text" placeholder="Текст..." style="width:80%"/><button class="btn">Надіслати</button></form></div>`;
+  document.getElementById('mf').onsubmit = async e=>{ e.preventDefault(); const fd=new FormData(e.target); const text = fd.get('text'); socket.emit('msg', { chatId: null, text }); e.target.reset(); };
+}
+
+function renderChat(chatId, messages){
+  const msgs = document.getElementById('msgs');
+  if(!msgs) return;
+  msgs.innerHTML = messages.map(m=>`<div style="padding:6px;border-radius:6px;background:#fbfdff;margin-bottom:4px"><strong>${m.fromName}</strong>: ${m.text}</div>`).join('');
+}
+
+function appendMsg(m){
+  const msgs = document.getElementById('msgs');
+  if(!msgs) return;
+  msgs.innerHTML += `<div style="padding:6px;border-radius:6px;background:#fbfdff;margin-bottom:4px"><strong>${m.fromName}</strong>: ${m.text}</div>`;
+}
+
+async function loadProfile(){
+  if(!token){ alert('Увійдіть'); return; }
+  const r = await api('/me'); const u = await r.json();
+  const res = await api('/listings'); const items = await res.json();
+  const myAds = items.filter(x=>x.ownerId===u.id);
+  content.innerHTML = `<div class="card"><h3>Профіль</h3><div>Ім'я: ${u.name}</div><div>Логін: ${u.login}</div><h4 style="margin-top:8px">Мої оголошення</h4>${myAds.map(a=>`<div style="border:1px solid #eef6ff;padding:8px;border-radius:6px;margin-bottom:6px"><strong>${a.title}</strong> — ${a.price} грн <button class="btn" data-id='${a.id}' data-action='del'>Видалити</button></div>`).join('')}</div>`;
+  content.querySelectorAll('[data-action=del]').forEach(b=>b.onclick=async e=>{ if(!confirm('Видалити?')) return; const id=b.dataset.id; const r=await fetch(apiBase+'/listings/'+id,{method:'DELETE', headers:{'Authorization':'Bearer '+token}}); if(r.ok){ alert('Видалено'); loadProfile(); } else alert('Помилка'); });
+}
+
+async function init(){
+  token = localStorage.getItem('tstore_token') || null;
+  if(token) await checkMe();
+  updateNav();
+  renderHome();
+}
+init();
+</script>
+</body>
+</html>
